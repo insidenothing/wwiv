@@ -5,3 +5,5 @@ cd /home/wwiv
 svn checkout svn://svn.code.sf.net/p/wwiv/svn/trunk wwiv-svn
 git add *
 git commit -m "Nightly SVN Pull"
+git push origin master
+
