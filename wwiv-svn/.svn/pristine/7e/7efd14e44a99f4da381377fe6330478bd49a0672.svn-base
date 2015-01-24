@@ -1,0 +1,193 @@
+/**************************************************************************/
+/*                                                                        */
+/*                              WWIV Version 5.0x                         */
+/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                                                                        */
+/*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
+/*    you may not use this  file  except in compliance with the License.  */
+/*    You may obtain a copy of the License at                             */
+/*                                                                        */
+/*                http://www.apache.org/licenses/LICENSE-2.0              */
+/*                                                                        */
+/*    Unless  required  by  applicable  law  or agreed to  in  writing,   */
+/*    software  distributed  under  the  License  is  distributed on an   */
+/*    "AS IS"  BASIS, WITHOUT  WARRANTIES  OR  CONDITIONS OF ANY  KIND,   */
+/*    either  express  or implied.  See  the  License for  the specific   */
+/*    language governing permissions and limitations under the License.   */
+/*                                                                        */
+/**************************************************************************/
+
+#include "bbs/wwiv.h"
+#include "core/strings.h"
+
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// Implementation
+//
+//
+//
+
+
+/** Displays the available file areas for the current user. */
+void dirlist(int mode) {
+  bool next   = false;
+  int oc      = session()->GetCurrentConferenceFileArea();
+  int os      = udir[session()->GetCurrentFileArea()].subnum;
+  int tally   = 0;
+  int nd      = 0;
+  int sn      = session()->GetCurrentConferenceFileArea();
+  int en      = session()->GetCurrentConferenceFileArea();
+  bool done   = false;
+
+  do {
+    bool is = false;
+    bool abort = false;
+    int p = 1;
+    int i = sn;
+    char *ss = nullptr;
+
+    while (i <= en && uconfdir[i].confnum != -1 && !abort) {
+      int i1 = 0;
+      while (i1 < session()->num_dirs && udir[i1].subnum != -1 && !abort) {
+        char s[ 255 ];
+        int firstp = 0;
+        if (p && mode == 0) {
+          p = 0;
+          firstp = i1;
+          bout.cls();
+          if (uconfdir[1].confnum != -1 && okconf(session()->user())) {
+            sprintf(s, " [ %s %c ] [ %s ] ", "Conference",
+                    dirconfs[uconfdir[i].confnum].designator,
+                    stripcolors(reinterpret_cast<char*>(dirconfs[uconfdir[i].confnum].name)));
+          } else {
+            sprintf(s, " [ %s File Areas ] ", syscfg.systemname);
+          }
+          bout.litebar(s);
+          DisplayHorizontalBar(78, 7);
+          bout << "|#2 Dir Qscan?     Directory Name                          Total Files\r\n";
+          DisplayHorizontalBar(78, 7);
+        }
+        ++nd;
+        int nDirectoryNumber = udir[i1].subnum;
+        if (nDirectoryNumber == 0) {
+          is = true;
+        }
+        std::string scanme = "|#6No ";
+        if (qsc_n[ nDirectoryNumber / 32 ] & (1L << (nDirectoryNumber % 32))) {
+          scanme = "|#5Yes";
+        }
+        dliscan1(nDirectoryNumber);
+        if (udir[session()->GetCurrentFileArea()].subnum == udir[i1].subnum) {
+          sprintf(s, " |#9%3s |#9\xB3 |#6%3s |#9\xB3|B1|15 %-40.40s |#9\xB3 |#9%4d|B0",
+                  udir[i1].keys, scanme.c_str(), directories[nDirectoryNumber].name,
+                  session()->numf);
+        } else {
+          sprintf(s, " |#9%3s |#9\xB3 |#6%3s |#9\xB3 %s%-40.40s |#9\xB3 |#9%4d",
+                  udir[i1].keys, scanme.c_str(),
+                  (((mode == 1) && (directories[udir[i1].subnum].mask & mask_cdrom)) ? "|#9" : "|#1"),
+                  directories[ nDirectoryNumber ].name, session()->numf);
+        }
+        if (okansi()) {
+          osan(s, &abort, &next);
+        } else {
+          osan(stripcolors(s), &abort, &next);
+        }
+        tally += session()->numf;
+        int lastp = i1++;
+        bout.nl();
+        if (lines_listed >= session()->screenlinest - 2 && mode == 0) {
+          p = 1;
+          lines_listed = 0;
+          DisplayHorizontalBar(78, 7);
+          bout.bprintf("|#1Select |#9[|#2%d-%d, [Enter]=Next Page, Q=Quit|#9]|#0 : ",
+                                            is ? firstp : firstp + 1, lastp);
+          ss = mmkey(1, WSession::mmkeyFileAreas, true);
+          if (isdigit(ss[0])) {
+            for (int i3 = 0; i3 < session()->num_dirs; i3++) {
+              if (wwiv::strings::IsEquals(udir[i3].keys, ss)) {
+                session()->SetCurrentFileArea(i3);
+                os      = udir[session()->GetCurrentFileArea()].subnum;
+                done    = true;
+                abort   = true;
+              }
+            }
+          } else {
+            switch (ss[0]) {
+            case 'Q':
+              if (okconf(session()->user())) {
+                setuconf(CONF_DIRS, oc, os);
+              }
+              done    = true;
+              abort   = true;
+              break;
+            default:
+              bout.backline();
+              break;
+            }
+          }
+        }
+      }
+      if (nd) {
+        i++;
+      }
+      if (!okconf(session()->user())) {
+        break;
+      }
+    }
+    if (i == 0) {
+      pla("None.", &abort);
+      bout.nl();
+    }
+    if (!abort && mode == 0) {
+      p = 1;
+      DisplayHorizontalBar(78, 7);
+      if (okconf(session()->user())) {
+        if (uconfdir[1].confnum != -1) {
+          bout.bprintf("|#1Select |#9[|#2%d-%d, J=Join Conference, ?=List Again, Q=Quit|#9]|#0 : ",
+                                            is ? 0 : 1, is ? nd - 1 : nd);
+        } else {
+          bout.bprintf("|#1Select |#9[|#2%d-%d, ?=List Again, Q=Quit|#9]|#0 : ", is ? 0 : 1,
+                                            is ? nd - 1 : nd);
+        }
+      } else {
+        bout.bprintf("|#1Select |#9[|#2%d-%d, ?=List Again, Q=Quit|#9]|#0 : ", is ? 0 : 1,
+                                          is ? nd - 1 : nd);
+      }
+      ss = mmkey(0, true);
+      if (wwiv::strings::IsEquals(ss, "") ||
+          wwiv::strings::IsEquals(ss, "Q") ||
+          wwiv::strings::IsEquals(ss, "\r")) {
+        if (okconf(session()->user())) {
+          setuconf(CONF_DIRS, oc, os);
+        }
+        done = true;
+      }
+      if (wwiv::strings::IsEquals(ss, "J")) {
+        if (okconf(session()->user())) {
+          jump_conf(CONF_DIRS);
+        }
+        sn = en = oc = session()->GetCurrentConferenceFileArea();
+        nd = i = 0;
+        is = false;
+      }
+      if (isdigit(ss[0])) {
+        for (int i3 = 0; i3 < session()->num_dirs; i3++) {
+          if (wwiv::strings::IsEquals(udir[i3].keys, ss)) {
+            session()->SetCurrentFileArea(i3);
+            os = udir[session()->GetCurrentFileArea()].subnum;
+            done = true;
+          }
+        }
+      }
+      nd = 0;
+    } else {
+      if (okconf(session()->user())) {
+        setuconf(CONF_DIRS, oc, os);
+      }
+      done = true;
+    }
+  } while (!hangup && !done);
+}
+
+
