@@ -24,7 +24,7 @@
 #include "bbs/wcomm.h"
 #include "bbs/wconstants.h"
 #include "bbs/wsession.h"
-#include "bbs/platform/wlocal_io.h"
+#include "bbs/local_io.h"
 
 
 void execute_ansi();
@@ -134,7 +134,7 @@ int bputch(char c, bool bUseInternalBuffer) {
     change_color = BPUTCH_NO_CODE;
   }
   if (local_echo) {
-    session()->localIO()->global_char(c);
+    session()->capture()->global_char(c);
   }
   if (outcom && !x_only && c != TAB) {
     if (!(!okansi() && (ansiptr || c == ESC))) {

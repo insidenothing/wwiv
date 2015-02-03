@@ -42,6 +42,8 @@
 #include "bbs/input.h"
 #include "bbs/instmsg.h"
 #include "bbs/keycodes.h"
+#include "bbs/local_io_unix_console.h"
+#include "bbs/null_local_io.h"
 #include "bbs/menu.h"
 #include "bbs/printfile.h"
 #include "bbs/voteedit.h"
@@ -51,7 +53,7 @@
 #include "bbs/wsession.h"
 #include "bbs/wstatus.h"
 #include "bbs/platform/platformfcns.h"
-#include "bbs/platform/wlocal_io.h"
+#include "bbs/local_io.h"
 #include "core/strings.h"
 #include "core/os.h"
 #include "core/wwivassert.h"
@@ -62,6 +64,7 @@
 #include <direct.h>
 #include "bbs/platform/win32/InternalTelnetServer.h"
 #include "bbs/platform/win32/Wiot.h"
+#include "bbs/local_io_win32.h"
 #else
 #include <unistd.h>
 #endif // _WIN32
@@ -92,7 +95,7 @@ WApplication* application() { return app; }
 WSession* session() { return sess; }
 
 #if !defined ( __unix__ )
-WLocalIO* GetWfcIO() { return sess->localIO(); }
+LocalIO* GetWfcIO() { return sess->localIO(); }
 
 void WApplication::GetCaller() {
   session()->SetMessageAreaCacheNumber(0);
@@ -138,10 +141,10 @@ void WApplication::GetCaller() {
 
 #else  // _unix__
 
-//class WfcLocalIO : public WLocalIO {
+//class WfcLocalIO : public LocalIO {
 //};
 
-WLocalIO* GetWfcIO() {
+LocalIO* GetWfcIO() {
   return sess->localIO(); // new WfcLocalIO(sess->remoteIO()); 
 }
 
@@ -154,7 +157,7 @@ int WApplication::doWFCEvents() {
   char ch;
   int lokb;
   static int mult_time;
-  WLocalIO* io = GetWfcIO();
+  LocalIO* io = GetWfcIO();
 
   unique_ptr<WStatus> pStatus(GetStatusManager()->GetStatus());
   do {
@@ -213,7 +216,7 @@ int WApplication::doWFCEvents() {
       any = true;
       okskey = true;
       resetnsp();
-      io->SetCursor(WLocalIO::cursorNormal);
+      io->SetCursor(LocalIO::cursorNormal);
       switch (ch) {
       // Local Logon
       case SPACE:
@@ -545,7 +548,7 @@ int WApplication::LocalLogon() {
   if (session()->localIO()->LocalKeyPressed()) {
     char ch = wwiv::UpperCase<char>(session()->localIO()->LocalGetChar());
     if (ch == 'Y') {
-      session()->localIO()->LocalFastPuts(YesNoString(true));
+      session()->localIO()->LocalPuts(YesNoString(true));
       bout << wwiv::endl;
       lokb = 1;
     } else if (ch == 0 || static_cast<unsigned char>(ch) == 224) {
@@ -766,6 +769,9 @@ int WApplication::Run(int argc, char *argv[]) {
         break;
       case 'W': {
         ok_modem_stuff = false;
+#ifndef _WIN32
+        session()->reset_local_io(new UnixConsoleIO());
+#endif  // _WIN32
         this->InitializeBBS();
         wwiv::wfc::ControlCenter control_center;
         control_center.Run();
@@ -1161,16 +1167,21 @@ WApplication::~WApplication() {
   }
 }
 
-WApplication* CreateApplication(WLocalIO* localIO) {
+WApplication* CreateApplication(LocalIO* localIO) {
   app = new WApplication();
   sess = new WSession(app, localIO);
+  localIO->set_capture(sess->capture());
   File::SetLogger(app);
   return app;
 }
 
 int bbsmain(int argc, char *argv[]) {
   try {
-    CreateApplication(nullptr);
+#ifdef _WIN32
+    CreateApplication(new Win32ConsoleIO());
+#else
+    CreateApplication(new NullLocalIO());
+#endif
     return application()->BBSMainLoop(argc, argv);
   } catch (exception& e) {
     // TODO(rushfan): Log this to sysop log or where else?

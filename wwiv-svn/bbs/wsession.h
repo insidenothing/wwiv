@@ -23,10 +23,11 @@
 #include <memory>
 #include <string>
 
+#include "bbs/capture.h"
 #include "bbs/wcomm.h"
 #include "bbs/wuser.h"
 #include "bbs/woutstreambuffer.h"
-#include "bbs/platform/wlocal_io.h"
+#include "bbs/local_io.h"
 #include "sdk/vardec.h"
 
 //
@@ -37,12 +38,6 @@
 // This is different from the BbsApp which holds global BBS information
 // associated with this instance of WWIV globally (not tied to a user)
 //
-
-
-#if defined(_MSC_VER)
-#pragma warning( push )
-#pragma warning( disable: 4511 4512 )
-#endif // _MSC_VER
 
 class WApplication;
 ///////////////////////////////////////////////////////////////////////////////
@@ -78,8 +73,7 @@ extern WOutStream bout;
 //
 class WSession {
  public:
-  WSession(WApplication* app);
-  WSession(WApplication* app, WLocalIO* localIO);
+  WSession(WApplication* app, LocalIO* localIO);
   virtual ~WSession();
 
  public:
@@ -91,7 +85,10 @@ class WSession {
 
   void DisplaySysopWorkingIndicator(bool displayWait);
   WComm* remoteIO() { return comm_.get(); }
-  WLocalIO* localIO() { return local_io_.get(); }
+  LocalIO* localIO() { return local_io_.get(); }
+  bool reset_local_io(LocalIO* wlocal_io);
+  wwiv::bbs::Capture* capture() { return capture_.get(); }
+
   /*! @function CreateComm Creates up the communications subsystem */
   void CreateComm(unsigned int nHandle);
 
@@ -240,9 +237,10 @@ class WSession {
   WApplication*   application_;
   WUser           m_thisuser;
   std::unique_ptr<WComm> comm_;
-  std::unique_ptr<WLocalIO> local_io_;
+  std::unique_ptr<LocalIO> local_io_;
   bool wwivmail_enabled_;
   bool internal_qwk_enabled_;
+  std::unique_ptr<wwiv::bbs::Capture> capture_;
 
  public:
   //
@@ -343,10 +341,6 @@ class WSession {
   newuser_colors[10],         // skip for now
   newuser_bwcolors[10];       // skip for now
 };
-
-#if defined(_MSC_VER)
-#pragma warning( pop )
-#endif
 
 #endif  // #if !defined (__INCLUDED_BBS_WSESSION_H__)
 

@@ -15,7 +15,7 @@
 /*    language governing permissions and limitations under the License.   */
 /*                                                                        */
 /**************************************************************************/
-#include "bbs/platform/wlocal_io.h"
+#include "bbs/local_io_win32.h"
 
 #include <algorithm>
 #include <chrono>
@@ -31,9 +31,9 @@
 #include "bbs/wstatus.h"
 #include "bbs/wconstants.h"
 #include "bbs/wwiv.h"
+#include "core/file.h"
 #include "core/os.h"
 #include "core/strings.h"
-#include "core/file.h"
 #include "core/wwivassert.h"
 
 // local functions
@@ -44,7 +44,7 @@ using std::chrono::milliseconds;
 using std::string;
 using std::unique_ptr;
 using std::vector;
-using wwiv::strings::StringPrintf;
+using namespace wwiv::strings;
 using wwiv::os::sound;
 
 #define PREV                1
@@ -52,10 +52,16 @@ using wwiv::os::sound;
 #define DONE                4
 #define ABORTED             8
 
+struct screentype {
+  short x1, y1, topline1, curatr1;
+  CHAR_INFO* scrn1;
+};
+
+static screentype m_ScreenSave;
 /*
  * Sets screen attribute at screen pos x,y to attribute contained in a.
  */
-void WLocalIO::set_attr_xy(int x, int y, int a) {
+void Win32ConsoleIO::set_attr_xy(int x, int y, int a) {
   COORD loc = {0};
   DWORD cb = {0};
 
@@ -65,11 +71,10 @@ void WLocalIO::set_attr_xy(int x, int y, int a) {
   WriteConsoleOutputAttribute(m_hConOut, reinterpret_cast< LPWORD >(&a), 1, loc, &cb);
 }
 
-WLocalIO::WLocalIO() {
+Win32ConsoleIO::Win32ConsoleIO() : LocalIO() {
   SetTopLine(0);
   SetScreenBottom(0);
   ExtendedKeyWaiting = 0;
-  wx = 0;
 
   m_hConOut = GetStdHandle(STD_OUTPUT_HANDLE);
   m_hConIn  = GetStdHandle(STD_INPUT_HANDLE);
@@ -97,85 +102,17 @@ WLocalIO::WLocalIO() {
   SetConsoleMode(m_hConIn, 0);
 }
 
-WLocalIO::~WLocalIO() {
+Win32ConsoleIO::~Win32ConsoleIO() {
   SetConsoleScreenBufferSize(m_hConOut, m_originalConsoleSize);
   SetConsoleTextAttribute(m_hConOut, 0x07);
   SetConsoleMode(m_hConIn, saved_input_mode_);
 }
 
-void WLocalIO::set_global_handle(bool bOpenFile, bool bOnlyUpdateVariable) {
-  if (x_only) {
-    return;
-  }
-
-  if (bOpenFile) {
-    if (!fileGlobalCap.IsOpen()) {
-      fileGlobalCap.SetName(StringPrintf("%sglobal-%d.txt", syscfg.gfilesdir, application()->GetInstanceNumber()));
-      fileGlobalCap.Open(File::modeBinary | File::modeAppend | File::modeCreateFile | File::modeReadWrite);
-      global_buf.clear();
-    }
-  } else {
-    if (fileGlobalCap.IsOpen() && !bOnlyUpdateVariable) {
-      fileGlobalCap.Write(global_buf);
-      fileGlobalCap.Close();
-      global_buf.clear();
-    }
-  }
-}
-
-void WLocalIO::global_char(char ch) {
-  if (fileGlobalCap.IsOpen()) {
-    global_buf.push_back(ch);
-    if (global_buf.size() >= GLOBAL_SIZE) {
-      fileGlobalCap.Write(global_buf);
-      global_buf.clear();
-    }
-  }
-}
-
-void WLocalIO::set_x_only(bool tf, const char *pszFileName, bool ovwr) {
-  static bool nOldGlobalHandle = false;
-
-  if (x_only) {
-    if (!tf) {
-      if (fileGlobalCap.IsOpen()) {
-        fileGlobalCap.Write(global_buf);
-        fileGlobalCap.Close();
-        global_buf.clear();
-      }
-      x_only = false;
-      set_global_handle(nOldGlobalHandle);
-      nOldGlobalHandle = false;
-      express = expressabort = false;
-    }
-  } else {
-    if (tf) {
-      nOldGlobalHandle = fileGlobalCap.IsOpen();
-      set_global_handle(false);
-      x_only = true;
-      wx = 0;
-      fileGlobalCap.SetName(syscfgovr.tempdir, pszFileName);
-
-      if (ovwr) {
-        fileGlobalCap.Open(File::modeBinary | File::modeText | File::modeCreateFile | File::modeReadWrite);
-      } else {
-        fileGlobalCap.Open(File::modeBinary | File::modeCreateFile | File::modeAppend | File::modeReadWrite);
-      }
-      global_buf.clear();
-      express = true;
-      expressabort = false;
-      if (!fileGlobalCap.IsOpen()) {
-        set_x_only(false, nullptr, false);
-      }
-    }
-  }
-  timelastchar1 = timer1();
-}
 
 // This, obviously, moves the cursor to the location specified, offset from
 // the protected dispaly at the top of the screen.  Note: this function
 // is 0 based, so (0,0) is the upper left hand corner.
-void WLocalIO::LocalGotoXY(int x, int y) {
+void Win32ConsoleIO::LocalGotoXY(int x, int y) {
   x = std::max<int>(x, 0);
   x = std::min<int>(x, 79);
   y = std::max<int>(y, 0);
@@ -183,7 +120,7 @@ void WLocalIO::LocalGotoXY(int x, int y) {
   y = std::min<int>(y, GetScreenBottom());
 
   if (x_only) {
-    wx = x;
+    capture_->set_wx(x);
     return;
   }
   m_cursorPosition.X = static_cast< short >(x);
@@ -195,9 +132,9 @@ void WLocalIO::LocalGotoXY(int x, int y) {
 * characters from the left hand side of the screen.  An X position of zero
 * means the cursor is at the left-most position
 */
-int WLocalIO::WhereX() {
+int Win32ConsoleIO::WhereX() {
   if (x_only) {
-    return (wx);
+    return capture_->wx();
   }
 
   CONSOLE_SCREEN_BUFFER_INFO m_consoleBufferInfo;
@@ -214,7 +151,7 @@ int WLocalIO::WhereX() {
 * of the screen display is taken into account.  A WhereY() of zero means
 * the cursor is at the top-most position it can be at.
 */
-int WLocalIO::WhereY() {
+int Win32ConsoleIO::WhereY() {
   CONSOLE_SCREEN_BUFFER_INFO m_consoleBufferInfo;
 
   GetConsoleScreenBufferInfo(m_hConOut, &m_consoleBufferInfo);
@@ -225,7 +162,7 @@ int WLocalIO::WhereY() {
   return m_cursorPosition.Y - GetTopLine();
 }
 
-void WLocalIO::LocalLf() {
+void Win32ConsoleIO::LocalLf() {
 /* This function performs a linefeed to the screen (but not remotely) by
 * either moving the cursor down one line, or scrolling the logical screen
 * up one line.
@@ -254,7 +191,7 @@ void WLocalIO::LocalLf() {
 /**
  * Returns the local cursor to the left-most position on the screen.
  */
-void WLocalIO::LocalCr() {
+void Win32ConsoleIO::LocalCr() {
   m_cursorPosition.X = 0;
   SetConsoleCursorPosition(m_hConOut, m_cursorPosition);
 }
@@ -262,7 +199,7 @@ void WLocalIO::LocalCr() {
 /**
  * Clears the local logical screen
  */
-void WLocalIO::LocalCls() {
+void Win32ConsoleIO::LocalCls() {
   int nOldCurrentAttribute = curatr;
   curatr = 0x07;
   SMALL_RECT scrollRect;
@@ -285,7 +222,7 @@ void WLocalIO::LocalCls() {
   curatr = nOldCurrentAttribute;
 }
 
-void WLocalIO::LocalBackspace() {
+void Win32ConsoleIO::LocalBackspace() {
 /* This function moves the cursor one position to the left, or if the cursor
 * is currently at its left-most position, the cursor is moved to the end of
 * the previous line, except if it is on the top line, in which case nothing
@@ -300,7 +237,7 @@ void WLocalIO::LocalBackspace() {
   SetConsoleCursorPosition(m_hConOut, m_cursorPosition);
 }
 
-void WLocalIO::LocalPutchRaw(unsigned char ch) {
+void Win32ConsoleIO::LocalPutchRaw(unsigned char ch) {
 /* This function outputs one character to the screen, then updates the
 * cursor position accordingly, scolling the screen if necessary.  Not that
 * this function performs no commands such as a C/R or L/F.  If a value of
@@ -348,8 +285,9 @@ void WLocalIO::LocalPutchRaw(unsigned char ch) {
  * This function outputs one character to the local screen.  C/R, L/F, TOF,
  * BS, and BELL are interpreted as commands instead of characters.
  */
-void WLocalIO::LocalPutch(unsigned char ch) {
+void Win32ConsoleIO::LocalPutch(unsigned char ch) {
   if (x_only) {
+    int wx = capture_->wx();
     if (ch > 31) {
       wx = (wx + 1) % 80;
     } else if (ch == RETURN || ch == CL) {
@@ -359,6 +297,7 @@ void WLocalIO::LocalPutch(unsigned char ch) {
         wx--;
       }
     }
+    capture_->set_wx(wx);
     return;
   }
 
@@ -381,18 +320,18 @@ void WLocalIO::LocalPutch(unsigned char ch) {
 }
 
 // Outputs a string to the local screen.
-void WLocalIO::LocalPuts(const string& text) {
+void Win32ConsoleIO::LocalPuts(const string& text) {
   for (char ch : text) {
     LocalPutch(ch);
   }
 }
 
-void WLocalIO::LocalXYPuts(int x, int y, const string& text) {
+void Win32ConsoleIO::LocalXYPuts(int x, int y, const string& text) {
   LocalGotoXY(x, y);
   LocalFastPuts(text);
 }
 
-void WLocalIO::LocalFastPuts(const string& text) {
+void Win32ConsoleIO::LocalFastPuts(const string& text) {
 // This RAPIDLY outputs ONE LINE to the screen only and is not exactly stable.
   DWORD cb = 0;
   int len = text.length();
@@ -402,7 +341,7 @@ void WLocalIO::LocalFastPuts(const string& text) {
   m_cursorPosition.X = m_cursorPosition.X + static_cast< short >(cb);
 }
 
-int  WLocalIO::LocalPrintf(const char *pszFormattedText, ...) {
+int  Win32ConsoleIO::LocalPrintf(const char *pszFormattedText, ...) {
   va_list ap;
   char szBuffer[ 1024 ];
 
@@ -413,7 +352,7 @@ int  WLocalIO::LocalPrintf(const char *pszFormattedText, ...) {
   return nNumWritten;
 }
 
-int  WLocalIO::LocalXYPrintf(int x, int y, const char *pszFormattedText, ...) {
+int  Win32ConsoleIO::LocalXYPrintf(int x, int y, const char *pszFormattedText, ...) {
   va_list ap;
   char szBuffer[ 1024 ];
 
@@ -424,7 +363,7 @@ int  WLocalIO::LocalXYPrintf(int x, int y, const char *pszFormattedText, ...) {
   return nNumWritten;
 }
 
-int  WLocalIO::LocalXYAPrintf(int x, int y, int nAttribute, const char *pszFormattedText, ...) {
+int  Win32ConsoleIO::LocalXYAPrintf(int x, int y, int nAttribute, const char *pszFormattedText, ...) {
   va_list ap;
   char szBuffer[ 1024 ];
 
@@ -440,7 +379,7 @@ int  WLocalIO::LocalXYAPrintf(int x, int y, int nAttribute, const char *pszForma
   return nNumWritten;
 }
 
-void WLocalIO::set_protect(int l) { //JZ Set_Protect Fix
+void Win32ConsoleIO::set_protect(int l) { //JZ Set_Protect Fix
 // set_protect sets the number of lines protected at the top of the screen.
   if (l != GetTopLine()) {
     COORD coord;
@@ -475,7 +414,7 @@ void WLocalIO::set_protect(int l) { //JZ Set_Protect Fix
                                defscreenbottom + 1 - GetTopLine();
 }
 
-void WLocalIO::savescreen() {
+void Win32ConsoleIO::savescreen() {
   COORD topleft;
   CONSOLE_SCREEN_BUFFER_INFO bufinfo;
   SMALL_RECT region;
@@ -502,7 +441,7 @@ void WLocalIO::savescreen() {
 /*
  * restorescreen restores a screen previously saved with savescreen
  */
-void WLocalIO::restorescreen() {
+void Win32ConsoleIO::restorescreen() {
   if (m_ScreenSave.scrn1) {
     // COORD size;
     COORD topleft;
@@ -523,17 +462,17 @@ void WLocalIO::restorescreen() {
   LocalGotoXY(m_ScreenSave.x1, m_ScreenSave.y1);
 }
 
-char xlate[] = {
+static char xlate[] = {
   'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', 0, 0, 0, 0,
   'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', 0, 0, 0, 0, 0,
   'Z', 'X', 'C', 'V', 'B', 'N', 'M',
 };
 
-char WLocalIO::scan_to_char(int nKeyCode) {
+static char scan_to_char(int nKeyCode) {
   return (nKeyCode >= 16 && nKeyCode <= 50) ? xlate[ nKeyCode - 16 ] : '\x00';
 }
 
-void WLocalIO::alt_key(int nKeyCode) {
+static void alt_key(int nKeyCode) {
   char ch1 = scan_to_char(nKeyCode);
   if (ch1) {
     char szCommand[ MAX_PATH ];
@@ -583,7 +522,7 @@ void WLocalIO::alt_key(int nKeyCode) {
 /*
  * skey handles all f-keys and the like hit FROM THE KEYBOARD ONLY
  */
-void WLocalIO::skey(char ch) {
+void Win32ConsoleIO::skey(char ch) {
   int nKeyCode = static_cast<unsigned char>(ch);
   int i, i1;
 
@@ -596,8 +535,9 @@ void WLocalIO::skey(char ch) {
         case F1:                          /* F1 */
           OnlineUserEditor();
           break;
-        case SF1:                          /* Shift-F1 */
-          set_global_handle((fileGlobalCap.IsOpen()) ? false : true);
+        case SF1:
+          /* Shift-F1 */
+          capture_->set_global_handle(!capture_->is_open());
           application()->UpdateTopScreen();
           break;
         case CF1:                          /* Ctrl-F1 */
@@ -605,8 +545,8 @@ void WLocalIO::skey(char ch) {
           break;
         case F2:                          /* F2 */
           session()->topdata++;
-          if (session()->topdata > WLocalIO::topdataUser) {
-            session()->topdata = WLocalIO::topdataNone;
+          if (session()->topdata > LocalIO::topdataUser) {
+            session()->topdata = LocalIO::topdataNone;
           }
           application()->UpdateTopScreen();
           break;
@@ -639,7 +579,7 @@ void WLocalIO::skey(char ch) {
           session()->remoteIO()->dtr(false);
           break;
         case F6:                          /* F6 */
-          ToggleSysopAlert();
+          SetSysopAlert(!GetSysopAlert());
           tleft(false);
           break;
         case F7:                          /* F7 */
@@ -708,7 +648,7 @@ static const vector<string> top_screen_items = {
   "%s chatting with %s"
 };
 
-void WLocalIO::tleft(bool bCheckForTimeOut) {
+void Win32ConsoleIO::tleft(bool bCheckForTimeOut) {
   int cx = WhereX();
   int cy = WhereY();
   int ctl = GetTopLine();
@@ -716,7 +656,7 @@ void WLocalIO::tleft(bool bCheckForTimeOut) {
   curatr = session()->GetTopScreenColor();
   SetTopLine(0);
   double nsln = nsl();
-  int nLineNumber = (chatcall && (session()->topdata == WLocalIO::topdataUser)) ? 5 : 4;
+  int nLineNumber = (chatcall && (session()->topdata == LocalIO::topdataUser)) ? 5 : 4;
 
 
   if (session()->topdata) {
@@ -735,7 +675,7 @@ void WLocalIO::tleft(bool bCheckForTimeOut) {
     if (session()->user()->GetSl() != 255 && session()->GetEffectiveSl() == 255) {
       LocalXYPuts(23, nLineNumber, top_screen_items[1]);
     }
-    if (fileGlobalCap.IsOpen()) {
+    if (capture_->is_open()) {
       LocalXYPuts(40, nLineNumber, top_screen_items[2]);
     }
     if (GetSysopAlert()) {
@@ -751,12 +691,12 @@ void WLocalIO::tleft(bool bCheckForTimeOut) {
     }
   }
   switch (session()->topdata) {
-  case WLocalIO::topdataSystem:
+  case LocalIO::topdataSystem:
     if (session()->IsUserOnline()) {
       LocalXYPrintf(18, 3, "T-%6.2f", nsln / SECONDS_PER_MINUTE_FLOAT);
     }
     break;
-  case WLocalIO::topdataUser: {
+  case LocalIO::topdataUser: {
     if (session()->IsUserOnline()) {
       LocalXYPrintf(18, 3, "T-%6.2f", nsln / SECONDS_PER_MINUTE_FLOAT);
     } else {
@@ -776,14 +716,14 @@ void WLocalIO::tleft(bool bCheckForTimeOut) {
   }
 }
 
-void WLocalIO::UpdateTopScreen(WStatus* pStatus, WSession *pSession, int nInstanceNumber) {
+void Win32ConsoleIO::UpdateTopScreen(WStatus* pStatus, WSession *pSession, int nInstanceNumber) {
   char i;
   char sl[82], ar[17], dar[17], restrict[17], rst[17], lo[90];
 
   int lll = lines_listed;
 
   if (so() && !incom) {
-    pSession->topdata = WLocalIO::topdataNone;
+    pSession->topdata = LocalIO::topdataNone;
   }
 
   if (syscfg.sysconfig & sysconfig_titlebar) {
@@ -794,13 +734,13 @@ void WLocalIO::UpdateTopScreen(WStatus* pStatus, WSession *pSession, int nInstan
   }
 
   switch (pSession->topdata) {
-  case WLocalIO::topdataNone:
+  case LocalIO::topdataNone:
     set_protect(0);
     break;
-  case WLocalIO::topdataSystem:
+  case LocalIO::topdataSystem:
     set_protect(5);
     break;
-  case WLocalIO::topdataUser:
+  case LocalIO::topdataUser:
     if (chatcall) {
       set_protect(6);
     } else {
@@ -823,9 +763,9 @@ void WLocalIO::UpdateTopScreen(WStatus* pStatus, WSession *pSession, int nInstan
   sl[80] = '\0';
 
   switch (pSession->topdata) {
-  case WLocalIO::topdataNone:
+  case LocalIO::topdataNone:
     break;
-  case WLocalIO::topdataSystem: {
+  case LocalIO::topdataSystem: {
     LocalXYPrintf(0, 0, "%-50s  Activity for %8s:      ", syscfg.systemname, pStatus->GetLastDate());
 
     LocalXYPrintf(0, 1, "Users: %4u       Total Calls: %5lu      Calls Today: %4u    Posted      :%3u ",
@@ -846,7 +786,7 @@ void WLocalIO::UpdateTopScreen(WStatus* pStatus, WSession *pSession, int nInstan
                   pStatus->GetNumFeedbackSentToday());
   }
   break;
-  case WLocalIO::topdataUser: {
+  case LocalIO::topdataUser: {
     strcpy(rst, restrict_string);
     for (i = 0; i <= 15; i++) {
       if (pSession->user()->HasArFlag(1 << i)) {
@@ -931,7 +871,7 @@ void WLocalIO::UpdateTopScreen(WStatus* pStatus, WSession *pSession, int nInstan
  *
  * @return true if a key has been pressed at the local console, false otherwise
  */
-bool WLocalIO::LocalKeyPressed() {
+bool Win32ConsoleIO::LocalKeyPressed() {
   if (x_only) {
     return false;
   }
@@ -952,7 +892,7 @@ bool WLocalIO::LocalKeyPressed() {
 * Alt-X, etc.).  The function must be called again upon receiving
 * a value of 0 to obtain the value of the extended key pressed.
 */
-unsigned char WLocalIO::LocalGetChar() {
+unsigned char Win32ConsoleIO::LocalGetChar() {
   if (ExtendedKeyWaiting) {
     ExtendedKeyWaiting = 0;
     return GetKeyboardChar();
@@ -964,7 +904,7 @@ unsigned char WLocalIO::LocalGetChar() {
   return rc;
 }
 
-void WLocalIO::SaveCurrentLine(char *cl, char *atr, char *xl, char *cc) {
+void Win32ConsoleIO::SaveCurrentLine(char *cl, char *atr, char *xl, char *cc) {
   *cc = static_cast<char>(curatr);
   strcpy(xl, endofline);
   {
@@ -986,7 +926,7 @@ void WLocalIO::SaveCurrentLine(char *cl, char *atr, char *xl, char *cc) {
   atr[ WhereX() ] = 0;
 }
 
-void WLocalIO::MakeLocalWindow(int x, int y, int xlen, int ylen) {
+void Win32ConsoleIO::MakeLocalWindow(int x, int y, int xlen, int ylen) {
   // Make sure that we are within the range of {(0,0), (80,GetScreenBottom())}
   xlen = std::min(xlen, 80);
   if (ylen > (GetScreenBottom() + 1 - GetTopLine())) {
@@ -1069,23 +1009,23 @@ void WLocalIO::MakeLocalWindow(int x, int y, int xlen, int ylen) {
   LocalGotoXY(xx, yy);
 }
 
-void WLocalIO::SetCursor(int cursorStyle) {
+void Win32ConsoleIO::SetCursor(int cursorStyle) {
   CONSOLE_CURSOR_INFO cursInfo;
 
   switch (cursorStyle) {
-  case WLocalIO::cursorNone: {
+  case LocalIO::cursorNone: {
     cursInfo.dwSize = 20;
     cursInfo.bVisible = false;
     SetConsoleCursorInfo(m_hConOut, &cursInfo);
   }
   break;
-  case WLocalIO::cursorSolid: {
+  case LocalIO::cursorSolid: {
     cursInfo.dwSize = 100;
     cursInfo.bVisible = true;
     SetConsoleCursorInfo(m_hConOut, &cursInfo);
   }
   break;
-  case WLocalIO::cursorNormal:
+  case LocalIO::cursorNormal:
   default: {
     cursInfo.dwSize = 20;
     cursInfo.bVisible = true;
@@ -1094,7 +1034,7 @@ void WLocalIO::SetCursor(int cursorStyle) {
   }
 }
 
-void WLocalIO::LocalClrEol() {
+void Win32ConsoleIO::LocalClrEol() {
   CONSOLE_SCREEN_BUFFER_INFO ConInfo;
   DWORD cb;
   int len = 80 - WhereX();
@@ -1104,7 +1044,7 @@ void WLocalIO::LocalClrEol() {
   FillConsoleOutputAttribute(m_hConOut, (WORD) curatr, len, ConInfo.dwCursorPosition, &cb);
 }
 
-void WLocalIO::LocalWriteScreenBuffer(const char *pszBuffer) {
+void Win32ConsoleIO::LocalWriteScreenBuffer(const char *pszBuffer) {
   CHAR_INFO ci[2000];
   const char *p = pszBuffer;
 
@@ -1120,7 +1060,7 @@ void WLocalIO::LocalWriteScreenBuffer(const char *pszBuffer) {
   WriteConsoleOutput(m_hConOut, ci, size, pos, &rect);
 }
 
-int WLocalIO::GetDefaultScreenBottom() {
+int Win32ConsoleIO::GetDefaultScreenBottom() {
   return (m_consoleBufferInfo.dwSize.Y - 1);
 }
 
@@ -1165,7 +1105,15 @@ unsigned char GetKeyboardChar() {
   return static_cast<unsigned char>(_getch());
 }
 
-void WLocalIO::LocalEditLine(char *pszInOutText, int len, int status, int *returncode, char *pszAllowedSet) {
+static int GetEditLineStringLength(const char *pszText) {
+  size_t i = strlen(pszText);
+  while (i >= 0 && (/*pszText[i-1] == 32 ||*/ static_cast<unsigned char>(pszText[i - 1]) == 176)) {
+    --i;
+  }
+  return i;
+}
+
+void Win32ConsoleIO::LocalEditLine(char *pszInOutText, int len, int status, int *returncode, char *pszAllowedSet) {
   WWIV_ASSERT(pszInOutText);
   WWIV_ASSERT(pszAllowedSet);
 
@@ -1339,15 +1287,7 @@ void WLocalIO::LocalEditLine(char *pszInOutText, int len, int status, int *retur
   LocalGotoXY(cx, cy);
 }
 
-int WLocalIO::GetEditLineStringLength(const char *pszText) {
-  int i = strlen(pszText);
-  while (i >= 0 && (/*pszText[i-1] == 32 ||*/ static_cast<unsigned char>(pszText[i - 1]) == 176)) {
-    --i;
-  }
-  return i;
-}
-
-void WLocalIO::UpdateNativeTitleBar() {
+void Win32ConsoleIO::UpdateNativeTitleBar() {
   // Set console title
   std::stringstream consoleTitleStream;
   consoleTitleStream << "WWIV Node " << application()->GetInstanceNumber() << " (" << syscfg.systemname << ")";
