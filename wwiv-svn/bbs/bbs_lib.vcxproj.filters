@@ -364,7 +364,7 @@
     <ClCompile Include="local_io.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="local_io_unix_console.cpp">
+    <ClCompile Include="local_io_curses.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -553,9 +553,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="null_local_io.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="local_io_unix_console.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

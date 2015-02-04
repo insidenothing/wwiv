@@ -42,7 +42,8 @@
 #include "bbs/input.h"
 #include "bbs/instmsg.h"
 #include "bbs/keycodes.h"
-#include "bbs/local_io_unix_console.h"
+#include "bbs/local_io.h"
+#include "bbs/local_io_curses.h"
 #include "bbs/null_local_io.h"
 #include "bbs/menu.h"
 #include "bbs/printfile.h"
@@ -53,7 +54,6 @@
 #include "bbs/wsession.h"
 #include "bbs/wstatus.h"
 #include "bbs/platform/platformfcns.h"
-#include "bbs/local_io.h"
 #include "core/strings.h"
 #include "core/os.h"
 #include "core/wwivassert.h"
@@ -94,9 +94,9 @@ using namespace wwiv::strings;
 WApplication* application() { return app; }
 WSession* session() { return sess; }
 
-#if !defined ( __unix__ )
 LocalIO* GetWfcIO() { return sess->localIO(); }
 
+#if !defined ( __unix__ )
 void WApplication::GetCaller() {
   session()->SetMessageAreaCacheNumber(0);
   session()->SetFileAreaCacheNumber(0);
@@ -140,13 +140,6 @@ void WApplication::GetCaller() {
 }
 
 #else  // _unix__
-
-//class WfcLocalIO : public LocalIO {
-//};
-
-LocalIO* GetWfcIO() {
-  return sess->localIO(); // new WfcLocalIO(sess->remoteIO()); 
-}
 
 void wfc_screen() {}
 void wfc_cls() {}
@@ -769,13 +762,9 @@ int WApplication::Run(int argc, char *argv[]) {
         break;
       case 'W': {
         ok_modem_stuff = false;
-#ifndef _WIN32
-        session()->reset_local_io(new UnixConsoleIO());
-#endif  // _WIN32
         this->InitializeBBS();
         wwiv::wfc::ControlCenter control_center;
         control_center.Run();
-        //this->doWFCEvents();
         exit (m_nOkLevel);
       } break;
       case 'X': {
