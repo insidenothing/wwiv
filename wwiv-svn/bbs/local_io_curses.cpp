@@ -44,7 +44,7 @@ using namespace wwiv::strings;
 
 extern CursesIO* out;
 
-static const int screen_bottom = 20;
+static const int default_screen_bottom = 20;
 
 static std::map<int, AnsiColor> CreateAnsiScheme() {
   std::map<int, AnsiColor> scheme;
@@ -78,14 +78,16 @@ static std::map<int, AnsiColor> CreateAnsiScheme() {
   return scheme;
 }
 
-CursesLocalIO::CursesLocalIO() : scheme_(CreateAnsiScheme()) {
-  window = new CursesWindow(out->window(), out->color_scheme(), screen_bottom + 1, 80, 0, 0);
-  scrollok(window->window(), true);
-  window->Clear();
+CursesLocalIO::CursesLocalIO() : CursesLocalIO(default_screen_bottom + 1) {}
+
+CursesLocalIO::CursesLocalIO(int num_lines) : scheme_(CreateAnsiScheme()) {
+  window_.reset(new CursesWindow(out->window(), out->color_scheme(), num_lines, 80, 0, 0));
+  scrollok(window_->window(), true);
+  window_->Clear();
 }
 
 CursesLocalIO::~CursesLocalIO() {
-  delete window;
+  SetCursor(LocalIO::cursorNormal);
 }
 
 void CursesLocalIO::SetColor(int color) {
@@ -94,19 +96,19 @@ void CursesLocalIO::SetColor(int color) {
   if (s.bold()) {
     attr |= A_BOLD;
   }
-  window->AttrSet(attr);
+  window_->AttrSet(attr);
 }
 
 void CursesLocalIO::LocalGotoXY(int x, int y) {
-  window->GotoXY(x, y);
+  window_->GotoXY(x, y);
 }
 
 int CursesLocalIO::WhereX() {
-  return window->GetcurX();
+  return window_->GetcurX();
 }
 
 int CursesLocalIO::WhereY() {
-  return window->GetcurY();
+  return window_->GetcurY();
 }
 
 void CursesLocalIO::LocalLf() {
@@ -114,32 +116,32 @@ void CursesLocalIO::LocalLf() {
   m_cursorPositionX = WhereX();
   m_cursorPositionY++;
 
-  if (m_cursorPositionY > screen_bottom) { // GetScreenBottom()) {
-    scroll(window->window());
-    m_cursorPositionY = screen_bottom;
+  if (m_cursorPositionY > GetScreenBottom()) { // GetScreenBottom()) {
+    scroll(window_->window());
+    m_cursorPositionY = GetScreenBottom();
   }
-  window->GotoXY(m_cursorPositionX, m_cursorPositionY);
+  window_->GotoXY(m_cursorPositionX, m_cursorPositionY);
 }
 
 void CursesLocalIO::LocalCr() {
   int x = WhereX();
   int y = WhereY();
-  window->GotoXY(0, y);
+  window_->GotoXY(0, y);
 }
 
 void CursesLocalIO::LocalCls() {
   SetColor(curatr);
-  window->Clear();
+  window_->Clear();
 }
 
 void CursesLocalIO::LocalBackspace() {
   SetColor(curatr);
-  window->Putch('\b');
+  window_->Putch('\b');
 }
 
 void CursesLocalIO::LocalPutchRaw(unsigned char ch) {
   SetColor(curatr);
-  window->Putch(ch);
+  window_->Putch(ch);
 }
 
 void CursesLocalIO::LocalPutch(unsigned char ch) {
@@ -188,7 +190,7 @@ void CursesLocalIO::LocalXYPuts(int x, int y, const string& text) {
 
 void CursesLocalIO::LocalFastPuts(const string& text) {
   SetColor(curatr);
-  window->Puts(text.c_str());
+  window_->Puts(text.c_str());
 }
 
 int CursesLocalIO::LocalPrintf(const char *pszFormattedText, ...) {
@@ -230,8 +232,9 @@ int CursesLocalIO::LocalXYAPrintf(int x, int y, int nAttribute, const char *pszF
 
 void CursesLocalIO::set_protect(int l) {
   SetTopLine(l);
-  session()->screenlinest = (session()->using_modem) ? session()->user()->GetScreenLines() :
-                               defscreenbottom + 1 - GetTopLine();
+  if (!session()->using_modem) {
+    session()->screenlinest = defscreenbottom + 1 - GetTopLine();
+  }
 }
 
 void CursesLocalIO::savescreen() {}
@@ -361,8 +364,8 @@ bool CursesLocalIO::LocalKeyPressed() {
   if (last_key_pressed != ERR) {
     return true;
   }
-  nodelay(window->window(), TRUE);
-  last_key_pressed = window->GetChar();
+  nodelay(window_->window(), TRUE);
+  last_key_pressed = window_->GetChar();
   return last_key_pressed != ERR;
 }
 
@@ -374,22 +377,27 @@ unsigned char CursesLocalIO::LocalGetChar() {
     last_key_pressed = ERR;
     return ch;
   }
-  nodelay(window->window(), FALSE);
+  nodelay(window_->window(), FALSE);
   last_key_pressed = ERR;
-  return window->GetChar();
+  return window_->GetChar();
 }
 
 void CursesLocalIO::MakeLocalWindow(int x, int y, int xlen, int ylen) {}
-void CursesLocalIO::SetCursor(int cursorStyle) {}
+
+void CursesLocalIO::SetCursor(int cursorStyle) {
+  curs_set(cursorStyle);
+}
 
 void CursesLocalIO::LocalClrEol() {
   SetColor(curatr);
-  window->ClrtoEol();
+  window_->ClrtoEol();
 }
 
 void CursesLocalIO::LocalWriteScreenBuffer(const char *pszBuffer) {}
-int CursesLocalIO::GetDefaultScreenBottom() { return 25; }
+int CursesLocalIO::GetDefaultScreenBottom() { return window_->GetMaxY() - 1; }
+
 void CursesLocalIO::LocalEditLine(char *s, int len, int status, int *returncode, char *ss) {}
+
 void CursesLocalIO::UpdateNativeTitleBar() {}
 
 void CursesLocalIO::UpdateTopScreen(WStatus* pStatus, WSession *pSession, int nInstanceNumber) {}

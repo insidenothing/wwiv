@@ -64,7 +64,7 @@ auto noop = [](){};
 
 static void wfc_command(int instance_location_id, std::function<void()> f, 
     std::function<void()> f2 = noop, std::function<void()> f3 = noop, std::function<void()> f4 = noop) {
-  session()->reset_local_io(new CursesLocalIO());
+  session()->reset_local_io(new CursesLocalIO(out->window()->GetMaxY()));
 
   if (!AllowLocalSysop()) {
     // TODO(rushfan): Show messagebox error?
@@ -121,9 +121,13 @@ void ControlCenter::Run() {
   // application()->InitializeBBS has been called.
 
   out->Cls(ACS_CKBOARD);
+  const int logs_y_padding = 1;
+  const int logs_start = 11;
+  const int logs_length = out->window()->GetMaxY() - logs_start - logs_y_padding;
+  log_.reset(new WfcLog(logs_length - 2));
   commands_.reset(CreateBoxedWindow("Commands", 9, 38, 1, 1));
   status_.reset(CreateBoxedWindow("Status", 9, 39, 1, 40));
-  logs_.reset(CreateBoxedWindow("Logs", 9, 78, 11, 1));
+  logs_.reset(CreateBoxedWindow("Logs", logs_length, 78, 11, 1));
 
   commands_->PutsXY(1, 1, "[B]oardEdit [C]hainEdit");
   commands_->PutsXY(1, 2, "[D]irEdit [E]mail [G]-FileEdit");
@@ -148,24 +152,33 @@ void ControlCenter::Run() {
   int saved_screenlines = session()->user()->GetScreenLines();
   session()->user()->SetScreenLines(18);
 
+  bool need_refresh = false;
   for (bool done = false; !done;) {
-    // refresh the window since we call endwin before invoking bbs code.
-    out->window()->Refresh();
-    commands_->Refresh();
-    status_->Refresh();
-    logs_->Refresh();
+    if (need_refresh) {
+      // refresh the window since we call endwin before invoking bbs code.
+      out->window()->Refresh();
+      commands_->Refresh();
+      status_->Refresh();
+      logs_->Refresh();
+      need_refresh = false;
+    }
 
+    wtimeout(commands_->window(), 500);
     int key = commands_->GetChar();
     if (key == ERR) {
       // we have a timeout. process other events
+      need_refresh = false;
+      UpdateLog();
+      continue;
     }
+    need_refresh = true;
     application()->SetWfcStatus(2);
     // Call endwin since we'll be out of curses IO
     endwin();
     switch (toupper(key)) {
-    case 'B': wfc_command(INST_LOC_BOARDEDIT, boardedit, cleanup_net); break;
-    case 'C': wfc_command(INST_LOC_CHAINEDIT, chainedit); break;
-    case 'D': wfc_command(INST_LOC_DIREDIT, dlboardedit); break;
+    case 'B': wfc_command(INST_LOC_BOARDEDIT, boardedit, cleanup_net); log_->Put("Ran BoardEdit"); break;
+    case 'C': wfc_command(INST_LOC_CHAINEDIT, chainedit); log_->Put("Ran ChainEdit"); break;
+    case 'D': wfc_command(INST_LOC_DIREDIT, dlboardedit); log_->Put("Ran DirEdit"); break;
     case 'E': wfc_command(INST_LOC_EMAIL, send_email_f, cleanup_net); break;
     case 'G': wfc_command(INST_LOC_GFILEEDIT, gfileedit); break;
     case 'H': wfc_command(INST_LOC_EVENTEDIT, eventedit); break;
@@ -181,6 +194,7 @@ void ControlCenter::Run() {
     case 'Y': wfc_command(INST_LOC_WFC, view_yesterday_sysop_log_f); break;
     case 'Z': wfc_command(INST_LOC_WFC, zlog, getkey_f); break;
     case 'Q': done=true; break;
+    case ' ': log_->Put("Not Implemented Yet"); break; 
     }
     out->window()->TouchWin();
     commands_->TouchWin();
@@ -189,6 +203,25 @@ void ControlCenter::Run() {
   }
   session()->user()->SetScreenLines(saved_screenlines);
 
+}
+
+void ControlCenter::UpdateLog() {
+  if (!log_->dirty()) {
+    return;
+  }
+
+  vector<string> lines;
+  if (!log_->Get(lines)) {
+    return;
+  }
+
+  int start = 1;
+  const int width = logs_->GetMaxX() - 4;
+  for (const auto& line : lines) {
+    logs_->PutsXY(1, start, line);
+    logs_->PutsXY(1 + line.size(), start, string(width - line.size(), ' '));
+    start++;
+  }
 }
 
 }

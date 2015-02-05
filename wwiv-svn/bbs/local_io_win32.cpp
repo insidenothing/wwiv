@@ -410,9 +410,11 @@ void Win32ConsoleIO::set_protect(int l) { //JZ Set_Protect Fix
     }
   }
   SetTopLine(l);
-  session()->screenlinest = (session()->using_modem) ? session()->user()->GetScreenLines() :
-                               defscreenbottom + 1 - GetTopLine();
+  if (!session()->using_modem) {
+    session()->screenlinest = defscreenbottom + 1 - GetTopLine();
+  }
 }
+  
 
 void Win32ConsoleIO::savescreen() {
   COORD topleft;
@@ -1061,7 +1063,7 @@ void Win32ConsoleIO::LocalWriteScreenBuffer(const char *pszBuffer) {
 }
 
 int Win32ConsoleIO::GetDefaultScreenBottom() {
-  return (m_consoleBufferInfo.dwSize.Y - 1);
+  return m_consoleBufferInfo.dwSize.Y - 1;
 }
 
 bool HasKeyBeenPressed(HANDLE in) {
