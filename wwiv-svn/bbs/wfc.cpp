@@ -115,11 +115,69 @@ ControlCenter::ControlCenter() {
 
 ControlCenter::~ControlCenter() {}
 
-void ControlCenter::Run() {
+static void DrawCommands(CursesWindow* commands) {
+  commands->SetColor(SchemeId::WINDOW_TEXT);
+  commands->PutsXY(1, 1, "[B]oardEdit [C]hainEdit");
+  commands->PutsXY(1, 2, "[D]irEdit [E]mail [G]-FileEdit");
+  commands->PutsXY(1, 3, "[I]nit Voting Data  [J] ConfEdit");
+  commands->PutsXY(1, 4, "Sysop[L]og  Read [M]ail  [N]etLog");
+  commands->PutsXY(1, 5, "[P]ending Net Data [/] Net Callout");
+  commands->PutsXY(1, 6, "[R]ead all email [S]ystem Status");
+  commands->PutsXY(1, 7, "[U]serEdit [Y]-Log [Z]-Log");
+}
+
+static void DrawStatus(CursesWindow* status) {
+  status->SetColor(SchemeId::WINDOW_TEXT);
+  status->PutsXY(2, 1, "Today:");
+  status->PutsXY(2, 2, "Calls: XXXXX Minutes: XXXXX");
+  status->PutsXY(2, 3, "M: XXX L: XXX E: XXX F: XXX FW: XXX");
+  status->PutsXY(2, 4, "Totals:");
+  status->PutsXY(2, 5, "Users: XXXXX Calls: XXXXX");
+  status->PutsXY(2, 6, "Last User:");
+  status->PutsXY(2, 7, "XXXXXXXXXXXXXXXXXXXXXXXXXX");
+}
+
+static string GetLastUserName(int inst_num) {
+  instancerec ir;
+  WUser u;
+
+  get_inst_info(inst_num, &ir);
+  application()->users()->ReadUserNoCache(&u, ir.user);
+  if (ir.flags & INST_FLAGS_ONLINE) {
+    return string(u.GetUserNameAndNumber(ir.user));
+  } else {
+    return "Nobody";
+  }
+
+}
+
+static void UpdateStatus(CursesWindow* status) {
+  status->SetColor(SchemeId::WINDOW_DATA);
+  std::unique_ptr<WStatus> pStatus(application()->GetStatusManager()->GetStatus());
+
+  status->PrintfXY(9, 2, "%-5d", pStatus->GetNumCallsToday());
+  status->PrintfXY(24, 2, "%-5d", pStatus->GetMinutesActiveToday());
+
+  status->PrintfXY(5, 3, "%-3u", pStatus->GetNumMessagesPostedToday());
+  status->PrintfXY(12, 3, "%-3u", pStatus->GetNumLocalPosts());
+  status->PrintfXY(19, 3, "%-3u", pStatus->GetNumEmailSentToday());
+  status->PrintfXY(26, 3, "%-3u", pStatus->GetNumFeedbackSentToday());
+
+  fwaiting = session()->user()->GetNumMailWaiting();
+  status->PrintfXY(34, 3, "%-3d", fwaiting);
+
+  status->PrintfXY(9, 5, "%-5d", pStatus->GetNumUsers());
+  status->PrintfXY(22, 5, "%-6lu", pStatus->GetCallerNumber());
+
+  // TODO(rushfan): Need to know the last used node number
+  // then call GetLastUserName.
+  //  status->PutsXY(2, 7, "XXXXXXXXXXXXXXXXXXXXXXXXXX");
+}
+
+void ControlCenter::Initialize() {
   // Initialization steps that have to happen before we
   // have a functional WFC system. This also supposes that
   // application()->InitializeBBS has been called.
-
   out->Cls(ACS_CKBOARD);
   const int logs_y_padding = 1;
   const int logs_start = 11;
@@ -129,14 +187,8 @@ void ControlCenter::Run() {
   status_.reset(CreateBoxedWindow("Status", 9, 39, 1, 40));
   logs_.reset(CreateBoxedWindow("Logs", logs_length, 78, 11, 1));
 
-  commands_->PutsXY(1, 1, "[B]oardEdit [C]hainEdit");
-  commands_->PutsXY(1, 2, "[D]irEdit [E]mail [G]-FileEdit");
-  commands_->PutsXY(1, 3, "[I]nit Voting Data  [J] ConfEdit");
-  commands_->PutsXY(1, 4, "Sysop[L]og  Read [M]ail  [N]etLog");
-  commands_->PutsXY(1, 5, "[P]ending Net Data [/] Net Callout");
-  commands_->PutsXY(1, 6, "[R]ead all email [S]ystem Status");
-  commands_->PutsXY(1, 7, "[U]serEdit [Y]-Log [Z]-Log");
-
+  DrawCommands(commands_.get());
+  DrawStatus(status_.get());
   vector<HelpItem> help_items0 = { { "?", "All Commands" },};
   vector<HelpItem> help_items1 = { {"Q", "Quit" } };
   out->footer()->ShowHelpItems(0, help_items0);
@@ -149,17 +201,15 @@ void ControlCenter::Run() {
 
   fwaiting = session()->user()->GetNumMailWaiting();
   application()->SetWfcStatus(1);
-  int saved_screenlines = session()->user()->GetScreenLines();
-  session()->user()->SetScreenLines(18);
+}
 
+void ControlCenter::Run() {
+  Initialize();
   bool need_refresh = false;
   for (bool done = false; !done;) {
     if (need_refresh) {
       // refresh the window since we call endwin before invoking bbs code.
-      out->window()->Refresh();
-      commands_->Refresh();
-      status_->Refresh();
-      logs_->Refresh();
+      RefreshAll();
       need_refresh = false;
     }
 
@@ -169,6 +219,7 @@ void ControlCenter::Run() {
       // we have a timeout. process other events
       need_refresh = false;
       UpdateLog();
+      UpdateStatus(status_.get());
       continue;
     }
     need_refresh = true;
@@ -196,13 +247,23 @@ void ControlCenter::Run() {
     case 'Q': done=true; break;
     case ' ': log_->Put("Not Implemented Yet"); break; 
     }
-    out->window()->TouchWin();
-    commands_->TouchWin();
-    status_->TouchWin();
-    logs_->TouchWin();
+    TouchAll();
   }
-  session()->user()->SetScreenLines(saved_screenlines);
+}
 
+void ControlCenter::TouchAll() {
+  out->window()->TouchWin();
+  commands_->TouchWin();
+  status_->TouchWin();
+  logs_->TouchWin();
+}
+
+void ControlCenter::RefreshAll() {
+  out->window()->Refresh();
+  commands_->Refresh();
+  status_->Refresh();
+  logs_->Refresh();
+  UpdateStatus(status_.get());
 }
 
 void ControlCenter::UpdateLog() {
