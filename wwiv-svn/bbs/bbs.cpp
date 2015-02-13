@@ -69,7 +69,6 @@
 #include <unistd.h>
 #endif // _WIN32
 
-static bool bUsingPppProject = true;
 extern time_t last_time_c;
 static WApplication *app;
 static WSession* sess;
@@ -149,7 +148,6 @@ void wfc_cls() {}
 int WApplication::doWFCEvents() {
   char ch;
   int lokb;
-  static int mult_time;
   LocalIO* io = GetWfcIO();
 
   unique_ptr<WStatus> pStatus(GetStatusManager()->GetStatus());
@@ -179,9 +177,9 @@ int WApplication::doWFCEvents() {
     lokb = 0;
     session()->SetCurrentSpeed("KB");
     time_t lCurrentTime = time(nullptr);
+    static time_t last_time_c;
     if (!any && (((rand() % 8000) == 0) || (lCurrentTime - last_time_c > 1200)) &&
-        (net_sysnum) && (ok_modem_stuff || bUsingPppProject) &&
-        (this->flags & OP_FLAGS_NET_CALLOUT)) {
+        net_sysnum && (this->flags & OP_FLAGS_NET_CALLOUT)) {
       lCurrentTime = last_time_c;
       attempt_callout();
       any = true;
@@ -237,13 +235,13 @@ int WApplication::doWFCEvents() {
         break;
       // Force Network Callout
       case '/':
-        if (net_sysnum && AllowLocalSysop() && (ok_modem_stuff || bUsingPppProject)) {
+        if (net_sysnum && AllowLocalSysop()) {
           force_callout(0);
         }
         break;
       // War Dial Connect
       case '.':
-        if (net_sysnum && AllowLocalSysop() && (ok_modem_stuff || bUsingPppProject)) {
+        if (net_sysnum && AllowLocalSysop()) {
           force_callout(1);
         }
         break;
@@ -515,6 +513,7 @@ int WApplication::doWFCEvents() {
           }
           session()->SetFileAreaCacheNumber(session()->GetFileAreaCacheNumber() + 1);
         } else {
+          static int mult_time = 0;
           if (this->IsCleanNetNeeded() || labs(timer1() - mult_time) > 1000L) {
             cleanup_net();
             mult_time = timer1();
